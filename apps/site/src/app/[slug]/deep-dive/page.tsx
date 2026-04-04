@@ -52,7 +52,7 @@ export default function DeepDivePage() {
         padding: '80px 32px',
         textAlign: 'center',
       }}>
-        <p style={{ textTransform: 'uppercase', letterSpacing: '2px', fontSize: '0.85rem', opacity: 0.8 }}>Franchise Deep Dive</p>
+        <p style={{ textTransform: 'uppercase', letterSpacing: '2px', fontSize: '0.85rem', opacity: 0.8 }}>Brand Deep Dive</p>
         <h1 style={{ fontSize: '3rem', margin: '16px 0' }}>{page.title}</h1>
         {brand && <p style={{ fontSize: '1.25rem', opacity: 0.9 }}>by {brand.name}</p>}
       </div>
@@ -74,7 +74,7 @@ export default function DeepDivePage() {
 
           {testimonials.length > 0 && (
             <div style={{ borderTop: '1px solid #eee', paddingTop: '32px' }}>
-              <h2>What Franchisees Say</h2>
+              <h2>What Partners Say</h2>
               {testimonials.map((t: any) => (
                 <blockquote key={t.id} style={{ borderLeft: `3px solid ${theme?.primaryColor || '#1a1a2e'}`, paddingLeft: '16px', margin: '24px 0', fontStyle: 'italic' }}>
                   <p>"{t.content.quote}"</p>
@@ -99,11 +99,11 @@ export default function DeepDivePage() {
                     </dd>
                   </>
                 )}
-                {page.sections.find((s: any) => s.content?.franchiseFee) && (
+                {page.sections.find((s: any) => s.content?.partnerFee) && (
                   <>
-                    <dt style={{ fontWeight: '600', marginTop: '8px' }}>Franchise Fee</dt>
+                    <dt style={{ fontWeight: '600', marginTop: '8px' }}>Partner Fee</dt>
                     <dd style={{ margin: '4px 0 0', color: '#666' }}>
-                      {page.sections.find((s: any) => s.content?.franchiseFee)?.content.franchiseFee}
+                      {page.sections.find((s: any) => s.content?.partnerFee)?.content.partnerFee}
                     </dd>
                   </>
                 )}

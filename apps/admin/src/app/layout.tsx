@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'Publication Admin',
-  description: 'Franchise publication management portal',
+  description: 'Brand publication management portal',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

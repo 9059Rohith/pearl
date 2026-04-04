@@ -1,0 +1,5 @@
+{
+  "project": "publication-interview-assessment",
+  "description": "Synthetic assessment repo for engineering candidate evaluation",
+  "context_files": ["AGENTS.md", "README.md"]
+}

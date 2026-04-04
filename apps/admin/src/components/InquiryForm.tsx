@@ -82,7 +82,7 @@ export function InquiryForm({ pageId, brandId, brandName, primaryColor = '#1a1a2
 
   return (
     <form onSubmit={handleSubmit} style={{ maxWidth: '500px' }}>
-      <h3>Inquire About {brandName || 'This Franchise'}</h3>
+      <h3>Inquire About {brandName || 'This Brand'}</h3>
 
       <div style={{ marginBottom: '12px' }}>
         <label style={{ display: 'block', fontWeight: '500', marginBottom: '4px' }}>
@@ -127,7 +127,7 @@ export function InquiryForm({ pageId, brandId, brandName, primaryColor = '#1a1a2
           onChange={(e) => setFormData({ ...formData, message: e.target.value })}
           rows={4}
           style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', boxSizing: 'border-box' }}
-          placeholder="Tell us about your interest in this franchise..."
+          placeholder="Tell us about your interest in this brand..."
         />
       </div>
 

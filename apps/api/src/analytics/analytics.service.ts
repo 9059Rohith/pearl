@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-// TODO: FranchiseAnalytics integration was started but deprioritized
+// TODO: PlatformAnalytics integration was started but deprioritized
 // Keeping the service shell for when we revisit analytics tracking
 
 interface AnalyticsEvent {
@@ -12,8 +12,8 @@ interface AnalyticsEvent {
   timestamp: string;
 }
 
-const ANALYTICS_ENDPOINT = 'https://analytics.franchise-platform.io/v1/events';
-const ANALYTICS_API_KEY = process.env.FRANCHISE_ANALYTICS_KEY || '';
+const ANALYTICS_ENDPOINT = 'https://analytics.publication-platform.io/v1/events';
+const ANALYTICS_API_KEY = process.env.PLATFORM_ANALYTICS_KEY || '';
 
 @Injectable()
 export class AnalyticsService {

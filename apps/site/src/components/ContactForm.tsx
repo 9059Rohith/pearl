@@ -57,7 +57,7 @@ export function ContactForm({ pageId, brandId, brandName, accentColor = '#1a1a2e
     return (
       <div style={{ textAlign: 'center', padding: '32px' }}>
         <h3 style={{ color: accentColor }}>Thank You!</h3>
-        <p>Your inquiry has been submitted. A representative from {brandName || 'the franchise'} will contact you soon.</p>
+        <p>Your inquiry has been submitted. A representative from {brandName || 'the brand'} will contact you soon.</p>
       </div>
     );
   }
@@ -65,7 +65,7 @@ export function ContactForm({ pageId, brandId, brandName, accentColor = '#1a1a2e
   return (
     <form onSubmit={handleSubmit}>
       <h3>Get More Information About {brandName || 'This Opportunity'}</h3>
-      <p style={{ color: '#666', marginBottom: '24px' }}>Fill out the form below and a franchise representative will reach out to you.</p>
+      <p style={{ color: '#666', marginBottom: '24px' }}>Fill out the form below and a brand representative will reach out to you.</p>
 
       {error && (
         <div style={{ padding: '8px 12px', background: '#fef2f2', color: '#dc2626', borderRadius: '4px', marginBottom: '16px', fontSize: '0.9rem' }}>
@@ -147,7 +147,7 @@ export function ContactForm({ pageId, brandId, brandName, accentColor = '#1a1a2e
       </button>
 
       <p style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '12px', textAlign: 'center' }}>
-        By submitting, you agree to receive communications about franchise opportunities.
+        By submitting, you agree to receive communications about brand opportunities.
       </p>
     </form>
   );
