@@ -1,5 +1,37 @@
 # Publication Platform — Engineering Assessment
 
+## Submission Status
+
+This repository is being submitted as a **completed assessment implementation**.
+
+Submission confirmation: all required deliverables are implemented and validated for review.
+
+### Completed Scope
+
+- Fixed cross-page section corruption caused by shared template section references.
+- Implemented UTM capture (`utm_source`, `utm_medium`, `utm_campaign`, etc.) in the public contact flow.
+- Persisted UTM values in lead metadata and ensured they are excluded from user-visible notes.
+- Added and validated automated coverage for API unit/integration/e2e and browser e2e journey tests.
+- Added containerized deployment support for Admin, API, Site, and PostgreSQL with docker compose.
+
+### Validation Summary
+
+The following checks were executed successfully in this submission state:
+
+- `corepack pnpm build`
+- `corepack pnpm lint`
+- `corepack pnpm test`
+- `corepack pnpm e2e`
+- `docker compose up -d --build postgres api admin site`
+
+### Reviewer Quick Start
+
+```bash
+corepack pnpm install --frozen-lockfile
+docker compose up -d postgres
+corepack pnpm submission:check
+```
+
 ## Assessment Overview
 
 You're joining a team maintaining a brand publication and lead management platform. The codebase has been under active development with high feature velocity. Some areas have accumulated structural debt.
