@@ -40,6 +40,7 @@ flowchart TB
 ## Setup Instructions
 
 ```bash
+cp .env.example .env
 pnpm install
 pnpm dev
 ```
@@ -49,6 +50,105 @@ pnpm dev
 | Admin | http://localhost:3000 | Admin portal |
 | API | http://localhost:3001 | Backend REST API |
 | Site | http://localhost:3002 | Public site |
+| pgAdmin | http://localhost:5050 | PostgreSQL Admin UI |
+
+## Environment Variables
+
+Use `.env.example` as the baseline.
+
+| Variable | App | Required | Purpose |
+|----------|-----|----------|---------|
+| `PORT` | API | No | API port (default `3001`) |
+| `DATABASE_URL` | API | Yes (for persistence) | PostgreSQL connection string |
+| `CORS_ORIGINS` | API | No | Comma-separated allowed origins |
+| `PLATFORM_ANALYTICS_KEY` | API | No | Enables analytics forwarding |
+| `NEXT_PUBLIC_API_URL` | Admin + Site | Yes | Browser-visible API base URL |
+| `NEXT_PUBLIC_SITE_URL` | Site | No | Public site URL used by metadata |
+| `PGADMIN_DEFAULT_EMAIL` | pgAdmin | No | pgAdmin login email |
+| `PGADMIN_DEFAULT_PASSWORD` | pgAdmin | No | pgAdmin login password |
+
+## Testing
+
+Run all test suites:
+
+```bash
+pnpm test
+```
+
+Run browser e2e (admin-to-site journey):
+
+```bash
+pnpm e2e
+```
+
+Run API tests only (unit + integration + e2e):
+
+```bash
+pnpm --filter @publication/api test
+```
+
+Run site unit tests only:
+
+```bash
+pnpm --filter @publication/site test
+```
+
+## Implemented Assessment Outcomes
+
+- Fixed cross-page section corruption when cloning from templates by deep-copying sections and section content.
+- Updated section editing to use copy-on-write semantics to avoid accidental shared-object mutation.
+- Implemented UTM capture in the public contact form and persisted values in lead metadata.
+- Prevented UTM data from leaking into user-visible lead notes.
+- Added automated unit, integration, and end-to-end tests for these flows.
+
+## Production Build and Deployment
+
+Build all applications:
+
+```bash
+pnpm build
+```
+
+Start each app in production mode locally:
+
+```bash
+pnpm --filter @publication/api start
+pnpm --filter @publication/admin start
+pnpm --filter @publication/site start
+```
+
+Containerized deployment:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Initialize database schema locally:
+
+```bash
+pnpm db:push
+```
+
+Default local DB credentials used by docker compose:
+
+- Host: `localhost`
+- Port: `5433`
+- Database: `publication`
+- User: `publication`
+- Password: `publication`
+- pgAdmin login password: `Raju2006`
+
+See `docker-compose.yml` and app-level `Dockerfile`s for deployment configuration.
+
+## Submission Readiness Checklist
+
+- Persistent PostgreSQL storage for brands, pages, and leads is implemented.
+- UTM capture is stored in lead metadata and excluded from visible notes.
+- Cross-page section corruption from template cloning is fixed.
+- API tests include unit, integration, and HTTP e2e coverage.
+- Frontend browser e2e covers admin creation flow through site lead submission.
+- CI enforces lint, test, build, browser e2e, and container vulnerability scan.
 
 ## Assessment Flow (Video-Based)
 
@@ -98,3 +198,4 @@ See [docs/EVALUATION-CRITERIA.md](docs/EVALUATION-CRITERIA.md) for the full rubr
 
 - [Architecture Guide](docs/ARCHITECTURE.md)
 - [Evaluation Criteria](docs/EVALUATION-CRITERIA.md)
+- [Submission Guide](docs/SUBMISSION.md)

@@ -45,21 +45,9 @@ export class LeadsService {
       { ...dto.metadata, ...utmParams },
     );
 
-    // Append source tracking to notes for brand visibility
-    if (Object.keys(utmParams).length > 0) {
-      const sourceInfo = Object.entries(utmParams)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(', ');
-      lead.notes = lead.notes
-        ? `${lead.notes} | Source: ${sourceInfo}`
-        : `Source: ${sourceInfo}`;
-    }
-
     // Include message in notes for quick brand reference
     if (dto.message) {
-      lead.notes = lead.notes
-        ? `${dto.message} | ${lead.notes}`
-        : dto.message;
+      lead.notes = dto.message;
     }
 
     this.leads.push(lead);

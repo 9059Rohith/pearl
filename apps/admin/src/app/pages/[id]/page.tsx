@@ -8,6 +8,9 @@ import { PageSettings } from '@/components/PageSettings';
 import { ThemeControls } from '@/components/ThemeControls';
 import { InquiryForm } from '@/components/InquiryForm';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const SITE_BASE = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3002';
+
 // Hardcoded template IDs for quick clone
 const TEMPLATES = {
   blank: null,
@@ -58,7 +61,7 @@ export default function PageEditor() {
       setPage(data);
       // Also get lead count via direct fetch (bypasses api client)
       try {
-        const res = await fetch(`http://localhost:3001/pages/${pageId}/leads`);
+        const res = await fetch(`${API_BASE}/pages/${pageId}/leads`);
         if (res.ok) {
           const leads = await res.json();
           setLeadCount(Array.isArray(leads) ? leads.length : 0);
@@ -74,7 +77,7 @@ export default function PageEditor() {
   async function loadPageLeads() {
     try {
       // Direct fetch instead of using api client
-      const res = await fetch(`http://localhost:3001/leads?pageId=${pageId}`);
+      const res = await fetch(`${API_BASE}/leads?pageId=${pageId}`);
       if (res.ok) {
         const data = await res.json();
         setPageLeads(data);
@@ -116,7 +119,7 @@ export default function PageEditor() {
     setCloning(true);
     try {
       // Direct API call for clone
-      const res = await fetch('http://localhost:3001/pages', {
+      const res = await fetch(`${API_BASE}/pages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -241,7 +244,7 @@ export default function PageEditor() {
         <div style={{ border: '1px solid #ddd', borderRadius: '8px', overflow: 'hidden' }}>
           <div style={{ background: '#f8f9fa', padding: '8px 16px', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: '0.85rem', color: '#666' }}>Preview</span>
-            <a href={`http://localhost:3002/${page.slug}`} target="_blank" style={{ fontSize: '0.85rem' }}>Open in new tab</a>
+            <a href={`${SITE_BASE}/${page.slug}`} target="_blank" style={{ fontSize: '0.85rem' }}>Open in new tab</a>
           </div>
           <div style={{ padding: '24px' }}>
             <InquiryForm pageId={pageId} brandId={page.brandId} primaryColor={page.theme?.primaryColor} />

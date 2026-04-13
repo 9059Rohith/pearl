@@ -2,12 +2,18 @@
   "name": "publication-platform",
   "private": true,
   "scripts": {
-    "dev": "turbo run dev",
-    "build": "turbo run build",
-    "lint": "turbo run lint",
-    "test": "turbo run test"
+    "dev": "corepack pnpm -r --parallel --if-present dev",
+    "build": "corepack pnpm --filter @publication/shared build && corepack pnpm --filter @publication/api build && corepack pnpm --filter @publication/admin build && corepack pnpm --filter @publication/site build",
+    "lint": "corepack pnpm --filter @publication/shared lint && corepack pnpm --filter @publication/api lint && corepack pnpm --filter @publication/admin lint && corepack pnpm --filter @publication/site lint",
+    "test": "corepack pnpm --filter @publication/api test && corepack pnpm --filter @publication/site test",
+    "db:push": "corepack pnpm --filter @publication/api db:push",
+    "e2e": "playwright test",
+    "submission:check": "corepack pnpm lint; corepack pnpm test; corepack pnpm build; corepack pnpm e2e"
   },
   "devDependencies": {
+    "@playwright/test": "^1.53.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
     "turbo": "^2.1.0"
   },
   "packageManager": "pnpm@9.12.0"

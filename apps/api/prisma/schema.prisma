@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Brand {
+  id             String   @id
+  name           String
+  slug           String   @unique
+  logoUrl        String?
+  primaryColor   String
+  secondaryColor String
+  contactEmail   String
+  settings       Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  pages          Page[]
+  leads          Lead[]
+}
+
+model Page {
+  id        String   @id
+  title     String
+  slug      String   @unique
+  brandId   String
+  status    String
+  sections  Json
+  theme     Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  leads     Lead[]
+
+  @@index([brandId])
+}
+
+model Lead {
+  id        String   @id
+  pageId    String
+  brandId   String
+  name      String
+  email     String
+  phone     String?
+  message   String?
+  metadata  Json
+  notes     String?
+  createdAt DateTime @default(now())
+
+  page      Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  brand     Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId])
+  @@index([pageId])
+}

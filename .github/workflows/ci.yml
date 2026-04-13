@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: publication
+          POSTGRES_USER: publication
+          POSTGRES_PASSWORD: publication
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U publication"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://publication:publication@localhost:5432/publication?schema=public
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_SITE_URL: http://localhost:3002
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3002
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: pnpm --filter @publication/api db:generate
+
+      - name: Apply Schema
+        run: pnpm --filter @publication/api db:push
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit/Integration/E2E Tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Install Playwright Browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser E2E
+        run: pnpm e2e
+
+      - name: Upload Playwright Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+
+  container-scan:
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  deploy-gate:
+    runs-on: ubuntu-latest
+    needs: [quality, container-scan]
+    steps:
+      - name: Deployment Gate Passed
+        run: echo "All required quality gates passed. Deployment is allowed."

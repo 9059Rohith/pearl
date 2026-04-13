@@ -1,73 +1,160 @@
-import { Injectable, NotFoundException, ConflictException, Inject, forwardRef } from '@nestjs/common';
-import { Page, Section, Lead, Brand } from '@publication/shared';
+import { Injectable, NotFoundException, ConflictException, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { Brand, Lead, Page, Section } from '@publication/shared';
 import { createPage, createSection, generateSlug } from './page.entity';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
 import { v4 as uuid } from 'uuid';
+import { PrismaService } from '../prisma/prisma.service';
 
-// Config
 const MAX_SECTIONS_PER_PAGE = 20;
 const SLUG_MAX_LEN = 128;
 const DEFAULT_THEME_PRIMARY = '#000000';
 const DEFAULT_THEME_SECONDARY = '#ffffff';
 const DEFAULT_FONT = 'system-ui';
 const AUTOSAVE_THROTTLE_MS = 1500;
-const EMAIL_FROM = 'noreply@publication-platform.io';
-const ANALYTICS_ENDPOINT = 'https://analytics.publication-platform.io/v1/events';
 const ANALYTICS_BUFFER_SIZE = 50;
 
 type PageStatus = 'draft' | 'published' | 'archived';
+
+type PageDbRecord = {
+  id: string;
+  title: string;
+  slug: string;
+  brandId: string;
+  status: string;
+  sections: Prisma.JsonValue;
+  theme: Prisma.JsonValue | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type LeadDbRecord = {
+  id: string;
+  pageId: string;
+  brandId: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  message: string | null;
+  metadata: Prisma.JsonValue;
+  notes: string | null;
+  createdAt: Date;
+};
 
 @Injectable()
 export class PagesService {
   private pages: Map<string, Page> = new Map();
   private slugIndex: Map<string, string> = new Map();
   private slugRedirects: Map<string, string> = new Map();
-
-  // Lead storage (managed here for cross-page lead tracking)
   private _leads: Lead[] = [];
-  private _leadNotificationQueue: Array<{ lead: Lead; pageId: string; ts: number }> = [];
-
-  // Brand cache (pulled in to avoid extra service calls during page operations)
   private _brandCache: Map<string, Brand> = new Map();
-
-  // Analytics buffer
   private _analyticsBuffer: Array<{ type: string; data: any; ts: number }> = [];
   private _analyticsTimer: any = null;
-
-  // Autosave tracking
   private _autosaveTimers: Map<string, NodeJS.Timeout> = new Map();
   private _lastSaveTimestamps: Map<string, number> = new Map();
 
-  // ---------- Page CRUD ----------
+  constructor(@Optional() private readonly prisma?: PrismaService) {}
+
+  private shouldUseDatabase(): boolean {
+    return !!this.prisma && !!process.env.DATABASE_URL;
+  }
+
+  private _cloneData<T>(data: T): T {
+    if (typeof structuredClone === 'function') {
+      return structuredClone(data);
+    }
+    return JSON.parse(JSON.stringify(data));
+  }
+
+  private toPageRecord(raw: PageDbRecord): Page {
+    return {
+      id: raw.id,
+      title: raw.title,
+      slug: raw.slug,
+      brandId: raw.brandId,
+      status: raw.status as Page['status'],
+      sections: Array.isArray(raw.sections) ? (raw.sections as unknown as Section[]) : [],
+      theme:
+        raw.theme && typeof raw.theme === 'object' && !Array.isArray(raw.theme)
+          ? (raw.theme as unknown as Page['theme'])
+          : undefined,
+      createdAt: new Date(raw.createdAt).toISOString(),
+      updatedAt: new Date(raw.updatedAt).toISOString(),
+    };
+  }
+
+  private toLeadRecord(raw: LeadDbRecord): Lead {
+    return {
+      id: raw.id,
+      pageId: raw.pageId,
+      brandId: raw.brandId,
+      name: raw.name,
+      email: raw.email,
+      phone: raw.phone || undefined,
+      message: raw.message || undefined,
+      metadata:
+        raw.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)
+          ? (raw.metadata as Record<string, unknown>)
+          : {},
+      notes: raw.notes || undefined,
+      createdAt: new Date(raw.createdAt).toISOString(),
+    };
+  }
+
+  private mergeTheme(currentTheme: any, nextTheme: any) {
+    return {
+      primaryColor: nextTheme?.primaryColor || currentTheme?.primaryColor || DEFAULT_THEME_PRIMARY,
+      secondaryColor: nextTheme?.secondaryColor || currentTheme?.secondaryColor || DEFAULT_THEME_SECONDARY,
+      fontFamily: nextTheme?.fontFamily || currentTheme?.fontFamily || DEFAULT_FONT,
+      headerStyle: nextTheme?.headerStyle || currentTheme?.headerStyle || 'centered',
+    };
+  }
 
   async findAll(brandId?: string, status?: string, sortBy?: string, limit?: number): Promise<Page[]> {
+    if (this.shouldUseDatabase()) {
+      const pages: PageDbRecord[] = await this.prisma!.page.findMany({
+        where: {
+          brandId: brandId || undefined,
+          status: status || undefined,
+        },
+      });
+      let output = pages.map((page) => this.toPageRecord(page));
+      if (sortBy === 'title') {
+        output = output.sort((a, b) => a.title.localeCompare(b.title));
+      } else if (sortBy === 'created') {
+        output = output.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      } else {
+        output = output.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      }
+      return limit && limit > 0 ? output.slice(0, limit) : output;
+    }
+
     let pages = Array.from(this.pages.values());
-    if (brandId) {
-      pages = pages.filter((p) => p.brandId === brandId);
-    }
-    if (status) {
-      pages = pages.filter((p) => p.status === status);
-    }
-    // sort
+    if (brandId) pages = pages.filter((p) => p.brandId === brandId);
+    if (status) pages = pages.filter((p) => p.status === status);
+
     if (sortBy === 'title') {
       pages.sort((a, b) => a.title.localeCompare(b.title));
-    } else if (sortBy === 'updated') {
-      pages.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     } else if (sortBy === 'created') {
       pages.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     } else {
-      // default sort by updated desc
       pages.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     }
-    if (limit && limit > 0) {
-      pages = pages.slice(0, limit);
-    }
-    return pages;
+
+    return limit && limit > 0 ? pages.slice(0, limit) : pages;
   }
 
   async findById(id: string): Promise<Page> {
+    if (this.shouldUseDatabase()) {
+      const page = await this.prisma!.page.findUnique({ where: { id } });
+      if (!page) {
+        throw new NotFoundException(`Page ${id} not found`);
+      }
+      return this.toPageRecord(page);
+    }
+
     const page = this.pages.get(id);
     if (!page) {
       throw new NotFoundException(`Page ${id} not found`);
@@ -76,24 +163,28 @@ export class PagesService {
   }
 
   async findBySlug(slug: string): Promise<Page> {
-    // Check for redirects first
+    if (this.shouldUseDatabase()) {
+      const redirectTarget = this.slugRedirects.get(slug);
+      const effectiveSlug = redirectTarget || slug;
+      const page = await this.prisma!.page.findUnique({ where: { slug: effectiveSlug } });
+      if (!page) {
+        throw new NotFoundException(`Page with slug "${slug}" not found`);
+      }
+      return this.toPageRecord(page);
+    }
+
     const redirectTarget = this.slugRedirects.get(slug);
     if (redirectTarget) {
       const pageId = this.slugIndex.get(redirectTarget);
-      if (pageId) {
-        return this.findById(pageId);
-      }
+      if (pageId) return this.findById(pageId);
     }
 
     const pageId = this.slugIndex.get(slug);
-    if (!pageId) {
-      throw new NotFoundException(`Page with slug "${slug}" not found`);
-    }
+    if (!pageId) throw new NotFoundException(`Page with slug "${slug}" not found`);
     return this.findById(pageId);
   }
 
   async create(dto: CreatePageDto): Promise<Page> {
-    // If creating from template, clone the template page
     if (dto.templateId) {
       return this._cloneFromTemplate(dto.templateId, dto);
     }
@@ -102,6 +193,29 @@ export class PagesService {
     if (slug.length > SLUG_MAX_LEN) {
       throw new ConflictException('Title too long for slug generation');
     }
+
+    if (this.shouldUseDatabase()) {
+      const existing = await this.prisma!.page.findUnique({ where: { slug } });
+      if (existing) {
+        throw new ConflictException(`Slug "${slug}" is already in use`);
+      }
+
+      const page = createPage(dto.title, dto.brandId);
+      const created = await this.prisma!.page.create({
+        data: {
+          id: page.id,
+          title: page.title,
+          slug: page.slug,
+          brandId: page.brandId,
+          status: page.status,
+          sections: page.sections as any,
+          theme: (page.theme || undefined) as any,
+        },
+      });
+      this._trackEvent('page_created', { pageId: created.id, brandId: dto.brandId, slug: created.slug });
+      return this.toPageRecord(created);
+    }
+
     if (this.slugIndex.has(slug)) {
       throw new ConflictException(`Slug "${slug}" is already in use`);
     }
@@ -109,106 +223,157 @@ export class PagesService {
     const page = createPage(dto.title, dto.brandId);
     this.pages.set(page.id, page);
     this.slugIndex.set(page.slug, page.id);
-
-    // Track analytics
     this._trackEvent('page_created', { pageId: page.id, brandId: dto.brandId, slug: page.slug });
-
     return page;
   }
 
   async update(id: string, dto: UpdatePageDto): Promise<Page> {
     const page = await this.findById(id);
+    let nextSlug = page.slug;
 
     if (dto.title && dto.title !== page.title) {
-      const newSlug = generateSlug(dto.title);
-
-      if (newSlug.length > SLUG_MAX_LEN) {
+      const generatedSlug = generateSlug(dto.title);
+      if (generatedSlug.length > SLUG_MAX_LEN) {
         throw new ConflictException('Title too long for slug generation');
       }
 
-      const existingPageId = this.slugIndex.get(newSlug);
-      if (existingPageId && existingPageId !== id) {
-        throw new ConflictException(`Slug "${newSlug}" is already in use`);
+      if (this.shouldUseDatabase()) {
+        const existingPage = await this.prisma!.page.findUnique({ where: { slug: generatedSlug } });
+        if (existingPage && existingPage.id !== id) {
+          throw new ConflictException(`Slug "${generatedSlug}" is already in use`);
+        }
+      } else {
+        const existingPageId = this.slugIndex.get(generatedSlug);
+        if (existingPageId && existingPageId !== id) {
+          throw new ConflictException(`Slug "${generatedSlug}" is already in use`);
+        }
       }
 
-      // Store redirect from old slug to new slug
-      if (page.slug !== newSlug) {
-        this.slugRedirects.set(page.slug, newSlug);
-        this.slugIndex.set(newSlug, id);
+      if (page.slug !== generatedSlug) {
+        this.slugRedirects.set(page.slug, generatedSlug);
+      }
+      nextSlug = generatedSlug;
+    }
+
+    const updatedTheme = dto.theme ? this.mergeTheme(page.theme, dto.theme) : page.theme;
+
+    if (this.shouldUseDatabase()) {
+      const updated = await this.prisma!.page.update({
+        where: { id },
+        data: {
+          title: dto.title ?? page.title,
+          slug: nextSlug,
+          status: dto.status ?? page.status,
+          theme: updatedTheme || undefined,
+          updatedAt: new Date(),
+        },
+      });
+
+      if (dto.status === 'published' && page.status !== 'published') {
+        this._trackEvent('page_published', { pageId: id, slug: nextSlug });
       }
 
+      this._trackEvent('page_updated', { pageId: id });
+      return this.toPageRecord(updated);
+    }
+
+    if (dto.title && dto.title !== page.title) {
+      this.slugIndex.delete(page.slug);
+      this.slugIndex.set(nextSlug, id);
       page.title = dto.title;
-      page.slug = newSlug;
+      page.slug = nextSlug;
     }
 
     if (dto.status) {
-      // Validate status transition
-      if (page.status === 'archived' && dto.status === 'published') {
-        // must go through draft first
-        if (dto.status !== 'draft') {
-          // actually allow it for now but log
-          console.log(`[Pages] Direct archived->published transition for ${id}`);
-        }
-      }
+      const previousStatus = page.status;
       page.status = dto.status;
-
-      // Send notification if page just got published
-      if (dto.status === 'published' && page.status !== 'published') {
+      if (dto.status === 'published' && previousStatus !== 'published') {
         this._trackEvent('page_published', { pageId: id, slug: page.slug });
       }
     }
 
     if (dto.theme) {
-      page.theme = {
-        primaryColor: dto.theme.primaryColor || page.theme?.primaryColor || DEFAULT_THEME_PRIMARY,
-        secondaryColor: dto.theme.secondaryColor || page.theme?.secondaryColor || DEFAULT_THEME_SECONDARY,
-        fontFamily: dto.theme.fontFamily || page.theme?.fontFamily || DEFAULT_FONT,
-        headerStyle: dto.theme.headerStyle || page.theme?.headerStyle || 'centered',
-      };
+      page.theme = updatedTheme;
     }
 
     page.updatedAt = new Date().toISOString();
-
     this._trackEvent('page_updated', { pageId: id });
     return page;
   }
 
   async delete(id: string): Promise<void> {
     const page = await this.findById(id);
+
+    if (this.shouldUseDatabase()) {
+      await this.prisma!.page.delete({ where: { id } });
+      this._trackEvent('page_deleted', { pageId: id, slug: page.slug });
+      return;
+    }
+
     this.slugIndex.delete(page.slug);
     this.pages.delete(id);
-
-    // Also clean up leads for this page? No, keep them for reporting
     this._trackEvent('page_deleted', { pageId: id, slug: page.slug });
   }
-
-  // ---------- Section management ----------
 
   async addSection(pageId: string, type: Section['type'], title: string, content: Record<string, any> = {}): Promise<Section> {
     const page = await this.findById(pageId);
     if (page.sections.length >= MAX_SECTIONS_PER_PAGE) {
       throw new ConflictException(`Maximum ${MAX_SECTIONS_PER_PAGE} sections per page`);
     }
-    const order = page.sections.length;
-    const section = createSection(type, title, content, order);
-    page.sections.push(section);
+
+    const section = createSection(type, title, content, page.sections.length);
+    const sections = [...page.sections, section];
+
+    if (this.shouldUseDatabase()) {
+      await this.prisma!.page.update({
+        where: { id: pageId },
+        data: {
+          sections: sections as any,
+          updatedAt: new Date(),
+        },
+      });
+      return section;
+    }
+
+    page.sections = sections;
     page.updatedAt = new Date().toISOString();
     return section;
   }
 
   async updateSection(pageId: string, sectionId: string, dto: UpdateSectionDto): Promise<Section> {
     const page = await this.findById(pageId);
-    const section = page.sections.find((s) => s.id === sectionId);
-    if (!section) {
+    const sectionIndex = page.sections.findIndex((s) => s.id === sectionId);
+    if (sectionIndex === -1) {
       throw new NotFoundException(`Section ${sectionId} not found`);
     }
 
-    if (dto.title !== undefined) section.title = dto.title;
-    if (dto.content !== undefined) Object.assign(section.content, dto.content);
-    if (dto.order !== undefined) section.order = dto.order;
+    const section = page.sections[sectionIndex];
+    const updatedSection: Section = {
+      ...section,
+      title: dto.title !== undefined ? dto.title : section.title,
+      content: dto.content !== undefined
+        ? { ...section.content, ...this._cloneData(dto.content) }
+        : section.content,
+      order: dto.order !== undefined ? dto.order : section.order,
+    };
 
+    const updatedSections = [...page.sections];
+    updatedSections[sectionIndex] = updatedSection;
+
+    if (this.shouldUseDatabase()) {
+      await this.prisma!.page.update({
+        where: { id: pageId },
+        data: {
+          sections: updatedSections as any,
+          updatedAt: new Date(),
+        },
+      });
+      return updatedSection;
+    }
+
+    page.sections = updatedSections;
     page.updatedAt = new Date().toISOString();
-    return section;
+    return updatedSection;
   }
 
   async removeSection(pageId: string, sectionId: string): Promise<void> {
@@ -217,78 +382,111 @@ export class PagesService {
     if (index === -1) {
       throw new NotFoundException(`Section ${sectionId} not found`);
     }
-    page.sections.splice(index, 1);
-    // Re-order remaining sections
-    page.sections.forEach((s, i) => (s.order = i));
+
+    const sections = page.sections.filter((s) => s.id !== sectionId).map((s, i) => ({ ...s, order: i }));
+
+    if (this.shouldUseDatabase()) {
+      await this.prisma!.page.update({
+        where: { id: pageId },
+        data: { sections, updatedAt: new Date() },
+      });
+      return;
+    }
+
+    page.sections = sections;
     page.updatedAt = new Date().toISOString();
   }
 
   async reorderSections(pageId: string, sectionIds: string[]): Promise<Section[]> {
     const page = await this.findById(pageId);
     const reordered: Section[] = [];
+
     for (let i = 0; i < sectionIds.length; i++) {
-      const s = page.sections.find((sec) => sec.id === sectionIds[i]);
-      if (s) {
-        s.order = i;
-        reordered.push(s);
+      const section = page.sections.find((s) => s.id === sectionIds[i]);
+      if (section) {
+        reordered.push({ ...section, order: i });
       }
     }
-    // put any sections not in the list at the end
-    for (const s of page.sections) {
-      if (!sectionIds.includes(s.id)) {
-        s.order = reordered.length;
-        reordered.push(s);
+
+    for (const section of page.sections) {
+      if (!sectionIds.includes(section.id)) {
+        reordered.push({ ...section, order: reordered.length });
       }
     }
+
+    if (this.shouldUseDatabase()) {
+      await this.prisma!.page.update({
+        where: { id: pageId },
+        data: { sections: reordered as any, updatedAt: new Date() },
+      });
+      return reordered;
+    }
+
     page.sections = reordered;
     page.updatedAt = new Date().toISOString();
     return reordered;
   }
 
-  // ---------- Template cloning ----------
-
   private async _cloneFromTemplate(templateId: string, dto: CreatePageDto): Promise<Page> {
     const template = await this.findById(templateId);
-
     const slug = generateSlug(dto.title);
+
+    if (this.shouldUseDatabase()) {
+      const existing = await this.prisma!.page.findUnique({ where: { slug } });
+      if (existing) {
+        throw new ConflictException(`Slug "${slug}" is already in use`);
+      }
+
+      const created = await this.prisma!.page.create({
+        data: {
+          id: uuid(),
+          title: dto.title,
+          slug,
+          brandId: dto.brandId,
+          status: 'draft',
+          sections: template.sections.map((section) => ({
+            ...section,
+            id: uuid(),
+            content: this._cloneData(section.content),
+          })),
+          theme: template.theme ? { ...template.theme } : undefined,
+        },
+      });
+
+      this._trackEvent('page_cloned', { templateId, newPageId: created.id });
+      return this.toPageRecord(created);
+    }
+
     if (this.slugIndex.has(slug)) {
       throw new ConflictException(`Slug "${slug}" is already in use`);
     }
 
-    const newPage: Page = {
+    const page: Page = {
       ...template,
       id: uuid(),
       title: dto.title,
       slug,
       brandId: dto.brandId,
       status: 'draft',
-      sections: template.sections,
+      sections: template.sections.map((section) => ({
+        ...section,
+        id: uuid(),
+        content: this._cloneData(section.content),
+      })),
       theme: template.theme ? { ...template.theme } : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
-    this.pages.set(newPage.id, newPage);
-    this.slugIndex.set(newPage.slug, newPage.id);
-
-    this._trackEvent('page_cloned', { templateId, newPageId: newPage.id });
-
-    return newPage;
+    this.pages.set(page.id, page);
+    this.slugIndex.set(page.slug, page.id);
+    this._trackEvent('page_cloned', { templateId, newPageId: page.id });
+    return page;
   }
 
-  // ---------- Lead management (cross-cutting concern) ----------
-
   async submitLead(data: any, queryParams: Record<string, string> = {}): Promise<Lead> {
-    // Validate page exists
-    let page: Page | null = null;
-    try {
-      page = await this.findById(data.pageId);
-    } catch {
-      // page might be deleted, still accept the lead
-      console.log(`[Leads] Lead submitted for unknown page ${data.pageId}`);
-    }
+    const page = await this.findById(data.pageId);
 
-    // Extract UTM parameters from query string
     const utmParams: Record<string, string> = {};
     for (const [key, value] of Object.entries(queryParams)) {
       if (key.startsWith('utm_')) {
@@ -296,94 +494,109 @@ export class PagesService {
       }
     }
 
-    const lead: Lead = {
+    const leadPayload: Lead = {
       id: uuid(),
-      pageId: data.pageId,
+      pageId: page.id,
       brandId: data.brandId,
       name: data.name,
       email: data.email,
       phone: data.phone || undefined,
       message: data.message || undefined,
       metadata: { ...data.metadata, ...utmParams },
+      notes: data.message || undefined,
       createdAt: new Date().toISOString(),
     };
 
-    // Append source tracking to notes for brand visibility
-    if (Object.keys(utmParams).length > 0) {
-      const sourceInfo = Object.entries(utmParams)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(', ');
-      lead.notes = lead.notes
-        ? `${lead.notes} | Source: ${sourceInfo}`
-        : `Source: ${sourceInfo}`;
+    if (this.shouldUseDatabase()) {
+      const created = await this.prisma!.lead.create({
+        data: {
+          id: leadPayload.id,
+          pageId: leadPayload.pageId,
+          brandId: leadPayload.brandId,
+          name: leadPayload.name,
+          email: leadPayload.email,
+          phone: leadPayload.phone,
+          message: leadPayload.message,
+          metadata: leadPayload.metadata,
+          notes: leadPayload.notes,
+          createdAt: new Date(leadPayload.createdAt),
+        },
+      });
+      this._trackEvent('lead_submitted', {
+        leadId: created.id,
+        pageId: created.pageId,
+        brandId: created.brandId,
+        hasUtm: Object.keys(utmParams).length > 0,
+      });
+      return this.toLeadRecord(created);
     }
 
-    // Include message in notes for quick brand reference
-    if (data.message) {
-      lead.notes = lead.notes
-        ? `${data.message} | ${lead.notes}`
-        : data.message;
-    }
-
-    this._leads.push(lead);
-
-    // Queue email notification
-    this._queueLeadNotification(lead, data.pageId);
-
-    // Track analytics
+    this._leads.push(leadPayload);
     this._trackEvent('lead_submitted', {
-      leadId: lead.id,
-      pageId: data.pageId,
-      brandId: data.brandId,
+      leadId: leadPayload.id,
+      pageId: leadPayload.pageId,
+      brandId: leadPayload.brandId,
       hasUtm: Object.keys(utmParams).length > 0,
     });
-
-    return lead;
+    return leadPayload;
   }
 
   async getLeads(filters: { brandId?: string; pageId?: string; startDate?: string; endDate?: string } = {}): Promise<Lead[]> {
+    if (this.shouldUseDatabase()) {
+      const leads: LeadDbRecord[] = await this.prisma!.lead.findMany({
+        where: {
+          brandId: filters.brandId || undefined,
+          pageId: filters.pageId || undefined,
+          createdAt: {
+            gte: filters.startDate ? new Date(filters.startDate) : undefined,
+            lte: filters.endDate ? new Date(filters.endDate) : undefined,
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      return leads.map((lead) => this.toLeadRecord(lead));
+    }
+
     let results = [...this._leads];
-    if (filters.brandId) {
-      results = results.filter((l) => l.brandId === filters.brandId);
-    }
-    if (filters.pageId) {
-      results = results.filter((l) => l.pageId === filters.pageId);
-    }
-    if (filters.startDate) {
-      results = results.filter((l) => new Date(l.createdAt) >= new Date(filters.startDate!));
-    }
-    if (filters.endDate) {
-      results = results.filter((l) => new Date(l.createdAt) <= new Date(filters.endDate!));
-    }
+    if (filters.brandId) results = results.filter((l) => l.brandId === filters.brandId);
+    if (filters.pageId) results = results.filter((l) => l.pageId === filters.pageId);
+    if (filters.startDate) results = results.filter((l) => new Date(l.createdAt) >= new Date(filters.startDate!));
+    if (filters.endDate) results = results.filter((l) => new Date(l.createdAt) <= new Date(filters.endDate!));
     return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getLeadById(leadId: string): Promise<Lead> {
+    if (this.shouldUseDatabase()) {
+      const lead = await this.prisma!.lead.findUnique({ where: { id: leadId } });
+      if (!lead) {
+        throw new NotFoundException(`Lead ${leadId} not found`);
+      }
+      return this.toLeadRecord(lead);
+    }
+
     const lead = this._leads.find((l) => l.id === leadId);
     if (!lead) throw new NotFoundException(`Lead ${leadId} not found`);
     return lead;
   }
 
   async getLeadStats(brandId: string): Promise<{ total: number; thisWeek: number; thisMonth: number; byPage: Record<string, number> }> {
-    const brandLeads = this._leads.filter((l) => l.brandId === brandId);
+    const leads = await this.getLeads({ brandId });
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const byPage: Record<string, number> = {};
-    for (const l of brandLeads) {
-      byPage[l.pageId] = (byPage[l.pageId] || 0) + 1;
+    for (const lead of leads) {
+      byPage[lead.pageId] = (byPage[lead.pageId] || 0) + 1;
     }
 
     return {
-      total: brandLeads.length,
-      thisWeek: brandLeads.filter((l) => new Date(l.createdAt) >= weekAgo).length,
-      thisMonth: brandLeads.filter((l) => new Date(l.createdAt) >= monthAgo).length,
+      total: leads.length,
+      thisWeek: leads.filter((l) => new Date(l.createdAt) >= weekAgo).length,
+      thisMonth: leads.filter((l) => new Date(l.createdAt) >= monthAgo).length,
       byPage,
     };
   }
-
-  // ---------- Brand cache ----------
 
   registerBrand(brand: Brand) {
     this._brandCache.set(brand.id, brand);
@@ -393,122 +606,23 @@ export class PagesService {
     return this._brandCache.get(brandId);
   }
 
-  // ---------- Email notification (inline, not separated) ----------
+  private _trackEvent(type: string, data: any) {
+    this._analyticsBuffer.push({ type, data: { ...data, timestamp: new Date().toISOString() }, ts: Date.now() });
+    if (this._analyticsBuffer.length >= ANALYTICS_BUFFER_SIZE) {
+      this._analyticsBuffer = [];
+      return;
+    }
 
-  private _queueLeadNotification(lead: Lead, pageId: string) {
-    this._leadNotificationQueue.push({ lead, pageId, ts: Date.now() });
-    // Process queue immediately (in production would be batched)
-    this._processNotificationQueue();
-  }
-
-  private async _processNotificationQueue() {
-    while (this._leadNotificationQueue.length > 0) {
-      const item = this._leadNotificationQueue.shift()!;
-      try {
-        const brand = this._brandCache.get(item.lead.brandId);
-        if (!brand) {
-          console.log(`[Email] No brand found for ${item.lead.brandId}, skipping notification`);
-          continue;
-        }
-
-        let page: Page | null = null;
-        try {
-          page = await this.findById(item.pageId);
-        } catch {
-          // page deleted
-        }
-
-        const templateData = {
-          brand_name: brand.name,
-          brand_logo: brand.logoUrl || '',
-          page_title: page ? page.title : 'Unknown Page',
-          page_url: page ? `/${page.slug}` : '#',
-          lead_name: item.lead.name,
-          lead_email: item.lead.email,
-          lead_phone: item.lead.phone || 'Not provided',
-          lead_message: item.lead.message || 'No message',
-          // NOTE: brand entity uses camelCase (primaryColor) but template expects snake_case
-          primary_color: (brand as any).primary_color || brand.primaryColor,
-          secondary_color: (brand as any).secondary_color || brand.secondaryColor,
-          submitted_at: new Date(item.lead.createdAt).toLocaleString(),
-        };
-
-        const html = this._renderEmailTemplate(templateData);
-        // In production, send via SMTP
-        console.log(`[Email] Lead notification for ${item.lead.email} -> ${brand.contactEmail}`);
-      } catch (err) {
-        console.error('[Email] Failed to process notification:', err);
+    if (!this._analyticsTimer) {
+      this._analyticsTimer = setTimeout(() => {
+        this._analyticsBuffer = [];
+        this._analyticsTimer = null;
+      }, 30000);
+      if (typeof this._analyticsTimer.unref === 'function') {
+        this._analyticsTimer.unref();
       }
     }
   }
-
-  private _renderEmailTemplate(data: any): string {
-    return `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background: ${data.primary_color || '#1a1a2e'}; padding: 24px; text-align: center;">
-          ${data.brand_logo ? `<img src="${data.brand_logo}" alt="${data.brand_name}" height="40" />` : ''}
-          <h2 style="color: #fff; margin: 8px 0 0;">${data.brand_name}</h2>
-        </div>
-        <div style="padding: 24px; background: #fff;">
-          <h3>New Lead from ${data.page_title}</h3>
-          <table style="width: 100%; border-collapse: collapse;">
-            <tr><td style="padding: 8px; font-weight: bold;">Name</td><td style="padding: 8px;">${data.lead_name}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold;">Email</td><td style="padding: 8px;">${data.lead_email}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold;">Phone</td><td style="padding: 8px;">${data.lead_phone}</td></tr>
-            <tr><td style="padding: 8px; font-weight: bold;">Message</td><td style="padding: 8px;">${data.lead_message}</td></tr>
-          </table>
-          <p style="color: #666; font-size: 0.85rem; margin-top: 16px;">Submitted: ${data.submitted_at}</p>
-        </div>
-        <div style="background: ${data.secondary_color || '#f5f5f5'}; padding: 16px; text-align: center; font-size: 0.85rem; color: #666;">
-          <p>This lead was captured from <a href="${data.page_url}">${data.page_title}</a></p>
-        </div>
-      </div>
-    `;
-  }
-
-  // ---------- Analytics (inline tracking) ----------
-
-  private _trackEvent(type: string, data: any) {
-    this._analyticsBuffer.push({
-      type,
-      data: { ...data, timestamp: new Date().toISOString() },
-      ts: Date.now(),
-    });
-
-    if (this._analyticsBuffer.length >= ANALYTICS_BUFFER_SIZE) {
-      this._flushAnalytics();
-    } else if (!this._analyticsTimer) {
-      this._analyticsTimer = setTimeout(() => {
-        this._flushAnalytics();
-        this._analyticsTimer = null;
-      }, 30000);
-    }
-  }
-
-  private async _flushAnalytics() {
-    if (this._analyticsBuffer.length === 0) return;
-    const events = [...this._analyticsBuffer];
-    this._analyticsBuffer = [];
-
-    try {
-      const apiKey = process.env.PLATFORM_ANALYTICS_KEY;
-      if (!apiKey) return; // silently skip if not configured
-
-      await fetch(ANALYTICS_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ events }),
-      });
-    } catch (err) {
-      // put events back for retry
-      this._analyticsBuffer.unshift(...events);
-    }
-  }
-
-  // ---------- Autosave ----------
 
   async autosaveSectionContent(pageId: string, sectionId: string, content: Record<string, any>): Promise<{ saved: boolean; throttled: boolean }> {
     const key = `${pageId}:${sectionId}`;
@@ -516,15 +630,16 @@ export class PagesService {
     const lastSave = this._lastSaveTimestamps.get(key) || 0;
 
     if (now - lastSave < AUTOSAVE_THROTTLE_MS) {
-      // Throttle: schedule a delayed save
       if (this._autosaveTimers.has(key)) {
         clearTimeout(this._autosaveTimers.get(key)!);
       }
+
       this._autosaveTimers.set(key, setTimeout(async () => {
         await this.updateSection(pageId, sectionId, { content });
         this._lastSaveTimestamps.set(key, Date.now());
         this._autosaveTimers.delete(key);
       }, AUTOSAVE_THROTTLE_MS));
+
       return { saved: false, throttled: true };
     }
 
@@ -532,8 +647,6 @@ export class PagesService {
     this._lastSaveTimestamps.set(key, now);
     return { saved: true, throttled: false };
   }
-
-  // ---------- Bulk operations ----------
 
   async bulkUpdateStatus(pageIds: string[], status: PageStatus): Promise<{ updated: number; failed: string[] }> {
     let updated = 0;
@@ -543,7 +656,7 @@ export class PagesService {
       try {
         await this.update(id, { status });
         updated++;
-      } catch (err) {
+      } catch {
         failed.push(id);
       }
     }
@@ -553,7 +666,7 @@ export class PagesService {
 
   async getPageWithLeadCount(id: string): Promise<Page & { leadCount: number }> {
     const page = await this.findById(id);
-    const leads = this._leads.filter((l) => l.pageId === id);
+    const leads = await this.getLeads({ pageId: id });
     return { ...page, leadCount: leads.length };
   }
 
@@ -565,27 +678,21 @@ export class PagesService {
     leadsThisWeek: number;
     topPages: Array<{ pageId: string; title: string; leads: number }>;
   }> {
-    let pages = Array.from(this.pages.values());
-    let leads = [...this._leads];
-
-    if (brandId) {
-      pages = pages.filter((p) => p.brandId === brandId);
-      leads = leads.filter((l) => l.brandId === brandId);
-    }
+    const pages = await this.findAll(brandId);
+    const leads = await this.getLeads({ brandId });
 
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    // Count leads per page
     const leadsByPage: Record<string, number> = {};
-    for (const l of leads) {
-      leadsByPage[l.pageId] = (leadsByPage[l.pageId] || 0) + 1;
+    for (const lead of leads) {
+      leadsByPage[lead.pageId] = (leadsByPage[lead.pageId] || 0) + 1;
     }
 
     const topPages = Object.entries(leadsByPage)
       .map(([pageId, count]) => {
-        const p = this.pages.get(pageId);
-        return { pageId, title: p?.title || 'Deleted Page', leads: count };
+        const page = pages.find((p) => p.id === pageId);
+        return { pageId, title: page?.title || 'Deleted Page', leads: count };
       })
       .sort((a, b) => b.leads - a.leads)
       .slice(0, 5);
@@ -600,27 +707,19 @@ export class PagesService {
     };
   }
 
-  // ---------- Search ----------
-
   async searchPages(query: string, brandId?: string): Promise<Page[]> {
     const q = query.toLowerCase();
-    let pages = Array.from(this.pages.values());
-    if (brandId) {
-      pages = pages.filter((p) => p.brandId === brandId);
-    }
-    return pages.filter((p) => {
-      if (p.title.toLowerCase().includes(q)) return true;
-      if (p.slug.includes(q)) return true;
-      // search in section content too
-      for (const s of p.sections) {
-        if (s.title.toLowerCase().includes(q)) return true;
-        if (JSON.stringify(s.content).toLowerCase().includes(q)) return true;
+    const pages = await this.findAll(brandId);
+    return pages.filter((page) => {
+      if (page.title.toLowerCase().includes(q)) return true;
+      if (page.slug.includes(q)) return true;
+      for (const section of page.sections) {
+        if (section.title.toLowerCase().includes(q)) return true;
+        if (JSON.stringify(section.content).toLowerCase().includes(q)) return true;
       }
       return false;
     });
   }
-
-  // ---------- Validation helpers ----------
 
   validatePageData(data: any): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
@@ -639,12 +738,28 @@ export class PagesService {
     return { valid: errors.length === 0, errors };
   }
 
-  // ---------- Export ----------
-
   async exportPageData(id: string): Promise<any> {
     const page = await this.findById(id);
-    const leads = this._leads.filter((l) => l.pageId === id);
-    const brand = this._brandCache.get(page.brandId);
+    const leads = await this.getLeads({ pageId: id });
+
+    let brand: Brand | null = null;
+    if (this.shouldUseDatabase()) {
+      const dbBrand = await this.prisma!.brand.findUnique({ where: { id: page.brandId } });
+      if (dbBrand) {
+        brand = {
+          id: dbBrand.id,
+          name: dbBrand.name,
+          slug: dbBrand.slug,
+          logoUrl: dbBrand.logoUrl || undefined,
+          primaryColor: dbBrand.primaryColor,
+          secondaryColor: dbBrand.secondaryColor,
+          contactEmail: dbBrand.contactEmail,
+          settings: dbBrand.settings as Record<string, any>,
+        };
+      }
+    } else {
+      brand = this._brandCache.get(page.brandId) || null;
+    }
 
     return {
       page: {
@@ -658,11 +773,11 @@ export class PagesService {
         updatedAt: page.updatedAt,
       },
       brand: brand ? { name: brand.name, slug: brand.slug } : null,
-      leads: leads.map((l) => ({
-        name: l.name,
-        email: l.email,
-        createdAt: l.createdAt,
-        metadata: l.metadata,
+      leads: leads.map((lead) => ({
+        name: lead.name,
+        email: lead.email,
+        createdAt: lead.createdAt,
+        metadata: lead.metadata,
       })),
       exportedAt: new Date().toISOString(),
     };

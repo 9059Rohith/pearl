@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { siteApi } from '@/lib/api';
+import { extractUtmParams } from '@/lib/utm';
 
 interface ContactFormProps {
   pageId: string;
@@ -32,6 +33,7 @@ export function ContactForm({ pageId, brandId, brandName, accentColor = '#1a1a2e
 
     setSubmitting(true);
     try {
+      const utmParams = extractUtmParams(new URLSearchParams(window.location.search));
       await siteApi.submitLead({
         pageId,
         brandId,
@@ -43,6 +45,7 @@ export function ContactForm({ pageId, brandId, brandName, accentColor = '#1a1a2e
           investmentRange: investmentRange || undefined,
           source: 'contact-form',
           submittedAt: new Date().toISOString(),
+          ...utmParams,
         },
       });
       setSubmitted(true);

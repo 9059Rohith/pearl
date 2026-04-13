@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: publication
+      POSTGRES_USER: publication
+      POSTGRES_PASSWORD: publication
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@publication.local
+      PGADMIN_DEFAULT_PASSWORD: Raju2006
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://publication:publication@postgres:5432/publication?schema=public
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3002
+      PLATFORM_ANALYTICS_KEY: ${PLATFORM_ANALYTICS_KEY:-}
+    ports:
+      - "3001:3001"
+    depends_on:
+      - postgres
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://api:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  site:
+    build:
+      context: .
+      dockerfile: apps/site/Dockerfile
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://api:3001
+      NEXT_PUBLIC_SITE_URL: http://localhost:3002
+    ports:
+      - "3002:3002"
+    depends_on:
+      - api
+
+volumes:
+  pg_data:
